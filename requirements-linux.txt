@@ -11,7 +11,7 @@
 # Note: win10toast and pywin32-ctypes are Windows-only and are NOT listed here.
 # ---------------------------------------------------------------
 anyio==4.12.1
-attrs==25.4.0
+attrs==26.1.0
 backports-tarfile==1.2.0
 beautifulsoup4==4.12.3
 cachetools==6.2.6
