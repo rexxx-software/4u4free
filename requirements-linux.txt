@@ -35,7 +35,7 @@ jaraco-context==6.1.0
 jaraco-functools==4.4.0
 keyring==25.7.0
 keyrings-alt==5.0.2
-lxml==6.0.2
+lxml==6.1.2
 markdown-it-py==3.0.0
 mdurl==0.1.2
 more-itertools==10.8.0

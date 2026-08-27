@@ -117,7 +117,7 @@ keyring==25.7.0
     # via steam-manifest-decrypt (pyproject.toml)
 keyrings-alt==5.0.2
     # via steam-manifest-decrypt (pyproject.toml)
-lxml==6.0.2
+lxml==6.1.2
     # via steam-manifest-decrypt (pyproject.toml)
 markdown-it-py==3.0.0
     # via rich
