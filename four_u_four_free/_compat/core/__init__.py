@@ -1,0 +1,1 @@
+"""Internal core compatibility utilities."""

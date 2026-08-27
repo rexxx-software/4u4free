@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "4u4free"
+version = "0.5.2"
+description = "A desktop and command-line toolkit for inspecting, backing up, and managing local Steam libraries"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+  { name = "rexxx" },
+]
+maintainers = [
+  { name = "rexxx" },
+]
+keywords = ["steam", "desktop", "cli", "backup", "vdf", "lua", "game-library", "pyside6"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Environment :: Win32 (MS Windows)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "colorama",
+  "InquirerPy",
+  "vdf",
+  "tqdm",
+  "psutil",
+  "httpx",
+  "rarfile",
+  "msgpack",
+  "pathvalidate",
+  "gevent",
+  "gevent-eventemitter==2.1",
+  "steam==1.4.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/rexxx-software/4u4free"
+Repository = "https://github.com/rexxx-software/4u4free.git"
+Issues = "https://github.com/rexxx-software/4u4free/issues"
+Changelog = "https://github.com/rexxx-software/4u4free/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+gui = [
+  "pyside6>=6.7,<7",
+]
+dev = [
+  "pytest",
+  "ruff",
+  "black",
+  "mypy",
+]
+
+[project.scripts]
+4u4free = "four_u_four_free.cli:main"
+
+[project.gui-scripts]
+4u4free-gui = "four_u_four_free.gui_qt:main"
+
+[tool.setuptools.packages.find]
+include = ["four_u_four_free*"]
+
+[tool.setuptools.package-data]
+four_u_four_free = [
+  "assets/*.ico",
+  "assets/*.png",
+  "assets/fonts/*",
+  "assets/icons/*",
+  "data/all_games.txt",
+  "data/store_metadata/*.json",
+  "_compat/lua/fallback_depotkeys.json",
+  "_compat/dlc_unlockers/resources/*/*.dll",
+]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

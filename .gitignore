@@ -1,0 +1,45 @@
+# Python bytecode, environments, and tooling caches
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build output
+build/
+dist/
+_internal/
+/*.exe
+tools/**/bin/
+tools/**/obj/
+
+# Local application data
+settings.bin
+settings_export.json
+credentials.json
+debug.log
+crash.log
+recent_files.json
+api_cache.json
+analytics.json
+backups/
+saved_lua/
+dlc_unlocker_cache/
+greenluma/
+
+# Temporary files and local archives
+tmp/
+*.zip
+*.7z
+*.rar
+*.jar
+notes.txt
+uv.lock
