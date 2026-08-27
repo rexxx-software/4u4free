@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible problem in 4u4free
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Remove account names, tokens, depot keys, and personal paths from logs before attaching them.
+  - type: input
+    id: version
+    attributes:
+      label: 4u4free version
+      placeholder: 0.5.2
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation type
+      options:
+        - Windows installer
+        - Portable Windows build
+        - Source checkout
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Run ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I removed credentials, account data, and personal paths from this report.
+          required: true
+        - label: I checked for an existing issue describing the same problem.
+          required: true

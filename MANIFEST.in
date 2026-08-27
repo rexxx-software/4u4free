@@ -1,0 +1,15 @@
+include ATTRIBUTION.md
+include AUTHORS.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include SECURITY.md
+
+recursive-include four_u_four_free/assets *
+
+prune _internal
+prune build
+prune dist
+global-exclude *.py[cod]
+global-exclude __pycache__

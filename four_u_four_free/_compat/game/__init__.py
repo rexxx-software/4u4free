@@ -1,0 +1,1 @@
+"""Internal game compatibility helpers."""
