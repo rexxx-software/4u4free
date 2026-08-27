@@ -28,6 +28,15 @@ class QtGuiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_dlc_page_warns_about_server_inventory_and_separate_depots(self):
+        window = MainWindow(auto_start=False)
+        try:
+            text = "\n".join(label.text() for label in window.findChildren(QLabel))
+            self.assertIn("server or account inventory", text)
+            self.assertIn("separate downloadable depots", text)
+        finally:
+            window.close()
+
     def test_installed_game_selection_resolves_dlc_target_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             library = Path(directory)

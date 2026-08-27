@@ -38,6 +38,7 @@ _UNLOCKER_TYPES = {
     "uplay-r1": UnlockerType.UPLAY_R1,
     "uplay-r2": UnlockerType.UPLAY_R2,
 }
+_ADDAPPID_RE = re.compile(r"^\s*addappid\s*\(\s*(\d+)", re.MULTILINE | re.IGNORECASE)
 
 
 def parse_dlc_ids(value: str) -> list[int]:
@@ -96,9 +97,27 @@ def fetch_dlc_catalog(app_id: int) -> dict:
                 "name": details.get(dlc_id, {}).get("name", f"DLC {dlc_id}"),
             }
             for dlc_id in dlc_ids
-            if details.get(dlc_id, {}).get("type", "") in {"", "dlc"}
+            if details.get(dlc_id, {}).get("type", "").lower()
+            in {"", "dlc", "music"}
         ],
     }
+
+
+def merge_entitlement_app_ids(lua_path: str | Path, app_ids: list[int]) -> int:
+    """Add selected DLC/content App IDs to an existing Steam metadata Lua."""
+    path = Path(lua_path)
+    if not path.is_file():
+        return 0
+    text = path.read_text(encoding="utf-8")
+    existing = {int(value) for value in _ADDAPPID_RE.findall(text)}
+    missing = [int(value) for value in dict.fromkeys(app_ids) if int(value) not in existing]
+    if not missing:
+        return 0
+    suffix = "\n" if text.endswith(("\n", "\r")) else "\n\n"
+    block = ["-- SELECTED DLC AND CONTENT APPS"]
+    block.extend(f"addappid({app_id})" for app_id in missing)
+    path.write_text(text + suffix + "\n".join(block) + "\n", encoding="utf-8")
+    return len(missing)
 
 
 def unlocker_instance(key: str):

@@ -40,7 +40,7 @@ def test_fetch_dlc_catalog_returns_names(monkeypatch):
     ]
 
 
-def test_fetch_dlc_catalog_excludes_soundtracks(monkeypatch):
+def test_fetch_dlc_catalog_includes_soundtracks(monkeypatch):
     monkeypatch.setattr(
         dlc_service, "get_dlc_list_from_store", lambda _app_id: ("Game", [11, 12])
     )
@@ -54,8 +54,19 @@ def test_fetch_dlc_catalog_excludes_soundtracks(monkeypatch):
     )
 
     assert dlc_service.fetch_dlc_catalog(42)["dlcs"] == [
-        {"id": 11, "name": "Fan Pack"}
+        {"id": 11, "name": "Fan Pack"},
+        {"id": 12, "name": "Soundtrack"},
     ]
+
+
+def test_merge_entitlement_app_ids_adds_only_missing_ids(tmp_path):
+    lua = tmp_path / "42.lua"
+    lua.write_text("addappid(42)\naddappid(11)\n", encoding="utf-8")
+
+    assert dlc_service.merge_entitlement_app_ids(lua, [11, 12, 13, 12]) == 2
+    assert dlc_service.merge_entitlement_app_ids(lua, [11, 12, 13]) == 0
+    assert lua.read_text(encoding="utf-8").count("addappid(12)") == 1
+    assert lua.read_text(encoding="utf-8").count("addappid(13)") == 1
 
 
 def test_inspect_game_apis_searches_subdirectories(tmp_path):

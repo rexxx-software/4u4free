@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +12,11 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from .errors import FourUFourFreeError
 from .vdf import get_mapping, get_string, read_vdf
+
+
+_STEAM_CONNECTION_STATE_RE = re.compile(
+    r"\[(Logged On|Logged Off|Logging On|Connecting),"
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,21 @@ class SteamGame:
         values["library"] = str(self.library)
         values["manifest"] = str(self.manifest)
         return values
+
+
+def steam_connection_state(steam_root: str | Path) -> str:
+    """Return Steam's latest connection state from its own connection log."""
+    log_path = Path(steam_root) / "logs" / "connection_log.txt"
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 262_144), os.SEEK_SET)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return "Unknown"
+    matches = _STEAM_CONNECTION_STATE_RE.findall(text)
+    return matches[-1] if matches else "Unknown"
 
 
 def _looks_like_steam(path: Path) -> bool:

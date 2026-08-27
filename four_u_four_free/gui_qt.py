@@ -79,6 +79,7 @@ from .dlc_service import (
     inspect_game_apis,
     inspect_unlockers,
     install_unlocker,
+    merge_entitlement_app_ids,
     require_app_id,
     require_game_directory,
     uninstall_unlocker,
@@ -96,7 +97,14 @@ from .playtime_service import (
 )
 from .profiles import list_profiles
 from .save_vault import SaveVault, VaultSnapshot, discover_save_folders, format_bytes
-from .steam import SteamGame, doctor, list_games, list_libraries, require_steam_root
+from .steam import (
+    SteamGame,
+    doctor,
+    list_games,
+    list_libraries,
+    require_steam_root,
+    steam_connection_state,
+)
 
 try:
     from four_u_four_free._compat.core.processes import (
@@ -137,7 +145,10 @@ try:
         _extract_pixeldrain_id,
         download_pixeldrain,
     )
-    from four_u_four_free._compat.steam_tools_compat import install_lua_to_steam
+    from four_u_four_free._compat.steam_tools_compat import (
+        install_lua_to_steam,
+        sync_manifest_to_config_depotcache,
+    )
 
     HAS_COMPAT = True
     COMPAT_IMPORT_ERROR = ""
@@ -1277,6 +1288,16 @@ class MainWindow(QMainWindow):
         self.dlc_summary.setObjectName("muted")
         layout.addWidget(self.dlc_summary)
 
+        compatibility_warning = QLabel(
+            "Compatibility warning: local DLC methods affect Steam API ownership "
+            "checks only. Content granted through a game's server or account inventory "
+            "may remain unavailable. Soundtracks and DLC with separate downloadable "
+            "depots still require their content to be installed through Steam."
+        )
+        compatibility_warning.setObjectName("warningText")
+        compatibility_warning.setWordWrap(True)
+        layout.addWidget(compatibility_warning)
+
         self.dlc_table = DataTable(
             0,
             3,
@@ -1469,12 +1490,17 @@ class MainWindow(QMainWindow):
             self,
             "Install DLC unlocker",
             f"Install {UNLOCKER_LABELS[key]} for {len(dlc_ids)} DLC entries into:\n{folder}\n\n"
-            "Original API files will be backed up before replacement.",
+            "Original API files will be backed up before replacement. Steam will be "
+            "restarted automatically if entitlement metadata is available.\n\n"
+            "Compatibility note: server/account-granted items and separately downloaded "
+            "soundtrack or DLC depots are not installed by this method and may remain "
+            "unavailable.",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
 
         row_key = f"dlc:{app_id}"
+        steam_root = self._steam_root()
 
         def update_setup(progress: int, status: str) -> None:
             self.events.download.emit(
@@ -1493,6 +1519,7 @@ class MainWindow(QMainWindow):
         update_setup(5, f"Applying {UNLOCKER_LABELS[key]}")
 
         def task():
+            steam_closed_for_metadata = False
             try:
                 ok = install_unlocker(
                     folder,
@@ -1513,33 +1540,126 @@ class MainWindow(QMainWindow):
                         f"{UNLOCKER_LABELS[key]} files were written, but the installed "
                         "state could not be verified."
                     )
-                return True
+                metadata_installed = False
+                steam_restarted = False
+                steam_ready = False
+                lua_source = default_data_dir() / "saved_lua" / f"{app_id}.lua"
+                if lua_source.is_file():
+                    if is_proc_running("steam.exe"):
+                        update_setup(55, "Restarting Steam for entitlement metadata")
+                        subprocess.run(
+                            [str(steam_root / "steam.exe"), "-shutdown"],
+                            cwd=str(steam_root),
+                            capture_output=True,
+                            timeout=10,
+                        )
+                        deadline = time.monotonic() + 20
+                        while (
+                            is_proc_running("steam.exe")
+                            and time.monotonic() < deadline
+                        ):
+                            time.sleep(0.25)
+                        if is_proc_running("steam.exe"):
+                            raise FourUFourFreeError(
+                                "Steam did not close in time. Close it and try again."
+                            )
+                        steam_closed_for_metadata = True
+                    merge_entitlement_app_ids(lua_source, dlc_ids)
+                    parsed = parse_lua_contents(
+                        lua_source.read_text(encoding="utf-8"), lua_source
+                    )
+                    if parsed is None:
+                        raise FourUFourFreeError(
+                            "The saved entitlement metadata could not be parsed."
+                        )
+                    ConfigVDFWriter(steam_root).add_decryption_keys_to_config(parsed)
+                    if not install_lua_to_steam(steam_root, app_id, lua_source):
+                        raise FourUFourFreeError(
+                            "The entitlement metadata could not be copied into Steam."
+                        )
+                    for depot_id, manifest_id in parsed.manifest_overrides.items():
+                        manifest = (
+                            steam_root
+                            / "depotcache"
+                            / f"{depot_id}_{manifest_id}.manifest"
+                        )
+                        if manifest.is_file():
+                            sync_manifest_to_config_depotcache(steam_root, manifest)
+                    metadata_installed = True
+                    if steam_closed_for_metadata:
+                        restarted, restart_message = launch_steam_unelevated(
+                            steam_root / "steam.exe", steam_root
+                        )
+                        if not restarted:
+                            raise FourUFourFreeError(
+                                "The metadata was installed, but Steam could not be "
+                                f"restarted: {restart_message}"
+                            )
+                        steam_restarted = True
+                        update_setup(90, "Waiting for Steam sign-in")
+                        ready_deadline = time.monotonic() + 45
+                        while time.monotonic() < ready_deadline:
+                            if steam_connection_state(steam_root) == "Logged On":
+                                steam_ready = True
+                                break
+                            if not is_proc_running("steam.exe"):
+                                break
+                            time.sleep(0.25)
+                return {
+                    "metadata_installed": metadata_installed,
+                    "steam_restarted": steam_restarted,
+                    "steam_ready": steam_ready,
+                }
             except Exception as exc:
+                if steam_closed_for_metadata and not is_proc_running("steam.exe"):
+                    launch_steam_unelevated(steam_root / "steam.exe", steam_root)
                 update_setup(0, f"Failed: {exc}")
                 raise
 
-        def done(_ok):
+        def done(result):
+            metadata_installed = bool(result["metadata_installed"])
+            steam_restarted = bool(result["steam_restarted"])
+            steam_ready = bool(result["steam_ready"])
             status = f"Files installed · {len(dlc_ids)} DLC entries"
+            if metadata_installed:
+                status += " · entitlement metadata copied"
             update_setup(100, status)
             self.log(
                 f"Installed {UNLOCKER_LABELS[key]} files for {game_name} "
                 f"({len(dlc_ids)} DLC entries) in {folder}"
             )
+            metadata_status = (
+                "Entitlement metadata copied  /  " if metadata_installed else ""
+            )
             self.dlc_summary.setText(
                 f"{UNLOCKER_LABELS[key]} files installed  /  "
-                f"{len(dlc_ids)} DLC entries configured  /  Verify in game"
+                f"{metadata_status}{len(dlc_ids)} DLC entries configured  /  "
+                "Restart Steam  /  Verify in game"
             )
             self._set_status(f"DLC files installed for {game_name}")
+            metadata_message = (
+                "Steam entitlement metadata was copied from the saved game metadata.\n"
+                if metadata_installed
+                else "No saved entitlement metadata was available.\n"
+            )
+            restart_message = (
+                "Steam restarted and completed sign-in with the new metadata.\n"
+                if steam_ready
+                else "Steam restarted but is still signing in; wait before launching.\n"
+                if steam_restarted
+                else ""
+            )
             QMessageBox.information(
                 self,
                 "DLC files installed",
                 f"{UNLOCKER_LABELS[key]} files were installed for {game_name}.\n\n"
                 f"Configured entries: {len(dlc_ids)}\n"
-                "4u4free verified the local configuration and backup, not the game's "
+                + metadata_message
+                + restart_message
+                + "4u4free verified the local configuration and backup, not the game's "
                 "runtime entitlement result.\n\n"
-                "Restart the game now. Do not wait for a Steam update: a local unlocker "
-                "does not create one. DLC files with separate depots are installed by "
-                "Steam only when the signed-in account owns them.",
+                "Restart Steam before launching the game so it reloads the updated "
+                "entitlement metadata.",
             )
 
         self.run_task(
