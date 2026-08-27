@@ -2,6 +2,18 @@
 
 Notable changes to 4u4free are recorded here.
 
+## 0.5.5
+
+- Added selected DLC and content App IDs to existing saved entitlement metadata,
+  with automatic Steam restart and sign-in readiness checks when metadata is
+  copied.
+- Included soundtrack entries in the public content catalog while clearly
+  warning that separate depots still require a Steam download.
+- Added compatibility warnings for server- or account-granted inventory content
+  that cannot be verified by a local Steam API ownership check.
+- Allowed local unlocker setup to complete without requiring a configured Steam
+  folder when no saved entitlement metadata is available.
+
 ## 0.5.4
 
 - Changed DLC completion reporting to distinguish verified local files from
