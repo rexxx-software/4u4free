@@ -1,0 +1,823 @@
+# SteaMidra - Steam game setup and manifest tool (SFF)
+# Copyright (c) 2025-2026 Midrag (https://github.com/Midrags)
+#
+# This file is part of SteaMidra.
+#
+# SteaMidra is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# SteaMidra is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with SteaMidra.  If not, see <https://www.gnu.org/licenses/>.
+
+"""API endpoints are in here"""
+
+import asyncio
+import io
+import json
+import logging
+import re
+from pathlib import Path
+
+import httpx
+
+from colorama import Fore, Style
+
+from sff.network.http_utils import download_to_tempfile, get_request
+from sff.lua.generator import LuaDlc, render_grouped_lua
+from sff.lua.provider import download_provider_update, load_provider, update_cache_from_lua_bytes
+from sff.ui.prompts import prompt_confirm, prompt_secret, prompt_select
+from sff.core.storage.settings import get_setting, set_setting
+from sff.core.structs import Settings
+from sff.zip import read_lua_from_zip
+
+logger = logging.getLogger(__name__)
+
+_PROVIDER_CACHE: dict | None = None
+
+
+def _cached_provider():
+    global _PROVIDER_CACHE
+    if _PROVIDER_CACHE is None:
+        _PROVIDER_CACHE = load_provider()
+    return _PROVIDER_CACHE
+
+
+_REVO_PATTERN = re.compile(
+    r'addappid\(\s*(\d+)\s*,\s*[01]\s*,\s*["\']([0-9a-fA-F]{64})["\']\s*\)'
+)
+
+
+def _update_fallback_depotkeys(lua_bytes):
+    try:
+        update_cache_from_lua_bytes(lua_bytes)
+    except Exception:
+        pass
+
+
+def _provider_key_map() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for depot_id, entry in _cached_provider().items():
+        if isinstance(entry, dict):
+            key = str(entry.get("key") or "")
+        else:
+            key = str(entry or "")
+        if key:
+            out[str(depot_id)] = key
+    return out
+
+
+def _count_provider_matches(depots: list[str], keys_dict: dict[str, str]) -> int:
+    return sum(1 for d in depots if keys_dict.get(d))
+
+
+def _build_lua_from_provider(app_id: str, app_name: str, depots: list[str], keys_dict: dict[str, str], dlc_app_ids: list[str], manifest_map: dict[str, str] | None = None, manifest_sizes: dict[str, int] | None = None, app_info: dict | None = None) -> str:
+    provider = _cached_provider()
+    depot_entries = []
+    empty_depots = []
+    for depot_id in depots:
+        key = keys_dict.get(depot_id)
+        if not key:
+            empty_depots.append(depot_id)
+            continue
+        meta = provider.get(depot_id) or {}
+        if isinstance(meta, str):
+            meta = {}
+        depot_entries.append({
+            "id": depot_id,
+            "key": key,
+            "name": meta.get("name") or f"Depot {depot_id}",
+            "parent_appid": meta.get("parent_appid") or str(app_id),
+            "parent_name": meta.get("parent_name") or app_name,
+            "manifest_id": (manifest_map or {}).get(depot_id, ""),
+            "manifest_size": (manifest_sizes or {}).get(depot_id, 0),
+        })
+    dlcs: list[LuaDlc] = []
+    _dlc_names: dict[str, str] = {}
+    _dlc_tokens: dict[str, str] = {}
+    try:
+        depots_info = (app_info or {}).get("depots", {})
+        if isinstance(depots_info, dict):
+            for _did, _dmeta in depots_info.items():
+                if not isinstance(_dmeta, dict):
+                    continue
+                _da = _dmeta.get("dlcappid")
+                if _da:
+                    _name = str(_dmeta.get("name") or "")
+                    _token = str(_dmeta.get("apptoken") or "")
+                    _dlc_names[str(_da)] = _name
+                    if _token:
+                        _dlc_tokens[str(_da)] = _token
+    except Exception:
+        pass
+    for dlc_id in dlc_app_ids:
+        dlcs.append(LuaDlc(
+            str(dlc_id),
+            name=_dlc_names.get(dlc_id, ""),
+            token=_dlc_tokens.get(dlc_id, ""),
+        ))
+    result = render_grouped_lua(app_id, app_name, depot_entries, manifest_map or {}, dlcs)
+    if empty_depots:
+        result += "\n-- EMPTY DEPOTS (no content on any branch)\n"
+        for ed in sorted(empty_depots):
+            result += f"-- addappid({ed}) -- Depot {ed} (empty depot)\n"
+    return result
+
+
+def get_oureverday(dest, app_id):
+    import httpx as _httpx
+
+    if not app_id or not str(app_id).strip().isdigit():
+        print(Fore.RED + f"Invalid App ID: '{app_id}'" + Style.RESET_ALL)
+        return None
+
+    # Try cached Lua first — avoids re-fetching Steam CM and provider
+    # keys on every download. The caller (download_lua_direct) targets
+    # <cwd>/saved_lua/, and _run_windows_fastest copies the result back
+    # there, so a subsequent download of the same app_id hits the cache.
+    lua_path = Path(dest) / f"{app_id}.lua"
+    if lua_path.exists() and lua_path.stat().st_size > 0:
+        print(Fore.GREEN + f"[Cached] Using existing Lua for {app_id}" + Style.RESET_ALL)
+        return lua_path
+
+    # Step 1: Steam native query for depot IDs
+    print(Fore.CYAN + f"[Step 1] Fetching depot list for {app_id} from Steam..." + Style.RESET_ALL)
+    try:
+        # Build the SteamClient INSIDE the executor task. SteamClient binds
+        # gevent's hub to whichever OS thread constructed it, so if we make
+        # the client out here and then submit() get_single_app_info, the
+        # executor thread has no hub for that client and gevent fires
+        # "This operation would block forever". Building it inside keeps
+        # the client + the hub on the same thread.
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FT
+        def _fetch_app_info():
+            from sff.network.steam_client import (
+                create_provider_for_current_thread as _mk,
+                fetch_app_info_http,
+            )
+
+            # The HTTP mirror is the preferred app-info source and does not
+            # require constructing the optional Steam CM client.  Creating
+            # that client first made every download fail when the unrelated
+            # asyncio ``eventemitter`` package was installed.
+            app_data = fetch_app_info_http(int(app_id)) or {}
+            depot_keys = [
+                d for d in app_data.get("depots", {}).keys() if str(d).isdigit()
+            ]
+            if depot_keys:
+                return app_data
+
+            _provider = _mk()
+            # Quick mode: single bounded attempt, no re-login escalation —
+            # a stuck shared Steam lock must never stall a download for
+            # minutes (the executor also never waits on shutdown).
+            app_data = _provider.get_single_app_info(int(app_id), quick=True)
+            depot_keys = [
+                d for d in app_data.get("depots", {}).keys() if str(d).isdigit()
+            ]
+            if not depot_keys:
+                # Stale/partial cache entry (e.g. an old CM payload with
+                # branches but no depots) — drop it and refetch so the
+                # SteamCMD mirror fills the full appinfo.
+                _provider.invalidate_app(int(app_id))
+                app_data = _provider.get_single_app_info(int(app_id), quick=True)
+            return app_data
+        app_info = None
+        _ex = ThreadPoolExecutor(max_workers=1)
+        try:
+            _fut = _ex.submit(_fetch_app_info)
+            app_info = _fut.result(timeout=45)
+        except _FT:
+            print(Fore.RED + f"Steam app-info timed out for {app_id} (CM probably down)." + Style.RESET_ALL)
+            return None
+        finally:
+            _ex.shutdown(wait=False)
+        if not app_info:
+            print(Fore.RED + f"Failed to query Steam App Info for {app_id}." + Style.RESET_ALL)
+            return None
+        depots = [d for d in app_info.get("depots", {}).keys() if d.isdigit()]
+    except Exception as e:
+        print(Fore.RED + f"Steam query failed while checking depots: {e}" + Style.RESET_ALL)
+        return None
+
+    if not depots:
+        print(Fore.RED + f"No valid depots exist on Steam for this App ID." + Style.RESET_ALL)
+        return None
+
+    # Pull latest manifest GIDs from Steam app info so we can write
+    # setManifestid lines into the generated Lua.
+    manifest_map: dict[str, str] = {}
+    manifest_sizes: dict[str, int] = {}
+    for depot_id in depots:
+        depot_info = app_info.get("depots", {}).get(depot_id, {})
+        manifests = depot_info.get("manifests", {})
+        public = manifests.get("public", {}) if isinstance(manifests, dict) else {}
+        gid = str(public.get("gid", ""))
+        if gid and gid.isdigit():
+            manifest_map[depot_id] = gid
+            size = public.get("size")
+            if isinstance(size, (int, str)) and str(size).isdigit():
+                manifest_sizes[depot_id] = int(size)
+
+    # Pull every DLC app id Steam reports for this game from extended.listofdlc.
+    # These are DLCs with no depot of their own (cosmetic, soundtrack, in-game
+    # currency, etc) — the keyed addappid(depot, 1, "key") lines won't cover
+    # them because they have no depot_id. Adding plain addappid(<dlc_id>) lines
+    # tells LumaCore to mark them as owned without any depot data.
+    dlc_app_ids: list[str] = []
+    try:
+        listofdlc = (
+            app_info.get("extended", {}).get("listofdlc", "")
+            if isinstance(app_info.get("extended"), dict) else ""
+        )
+        if isinstance(listofdlc, str) and listofdlc.strip():
+            dlc_app_ids = [
+                x.strip()
+                for x in listofdlc.split(",")
+                if x.strip().isdigit()
+            ]
+    except Exception:
+        dlc_app_ids = []
+
+    # Step 2: Bundled local key database
+    print(Fore.CYAN + f"[Step 2] Loading bundled key database..." + Style.RESET_ALL)
+    keys_dict = _provider_key_map()
+    if keys_dict:
+        print(Fore.GREEN + f"[OK] Loaded provider key database ({len(keys_dict):,} keyed entries)." + Style.RESET_ALL)
+    else:
+        print(Fore.YELLOW + f"Provider key database not found or contains no keys." + Style.RESET_ALL)
+
+    # Generate the Lua File Dynamically
+    found = _count_provider_matches(depots, keys_dict)
+
+    if found < len(depots):
+        missing = len(depots) - found
+        print(
+            Fore.YELLOW
+            + f"Provider is missing {missing} depot key(s). Refreshing provider once..."
+            + Style.RESET_ALL
+        )
+        try:
+            update_result = download_provider_update(timeout=20.0)
+            if update_result.get("ok"):
+                global _PROVIDER_CACHE
+                _PROVIDER_CACHE = None
+                print(
+                    Fore.GREEN
+                    + f"[OK] Provider refreshed from {update_result.get('url', '')} "
+                      f"({update_result.get('count', 0):,} entries)."
+                    + Style.RESET_ALL
+                )
+                keys_dict = _provider_key_map()
+                found = _count_provider_matches(depots, keys_dict)
+            else:
+                print(
+                    Fore.YELLOW
+                    + "Provider refresh did not complete: "
+                    + "; ".join(update_result.get("errors") or [])
+                    + Style.RESET_ALL
+                )
+        except Exception as exc:
+            print(Fore.YELLOW + f"Provider refresh failed ({exc})." + Style.RESET_ALL)
+
+    if found == 0:
+        print(Fore.RED + f"No known keys found in any database for {app_id}." + Style.RESET_ALL)
+        # Step 3: revobd.club — parse keys and inject into keys_dict (last resort)
+        print(Fore.CYAN + f"[Step 3] Trying revobd.club pre-built Lua archive..." + Style.RESET_ALL)
+        # _REVO_PATTERN is defined at module level
+        try:
+            revo_resp = _httpx.get(
+                f"https://api.luagen.revobd.club/{app_id}.zip",
+                timeout=20,
+                follow_redirects=True,
+            )
+            if revo_resp.status_code == 200 and revo_resp.content:
+                lua_bytes = read_lua_from_zip(io.BytesIO(revo_resp.content), decode=False)
+                if lua_bytes:
+                    revo_keys = dict(_REVO_PATTERN.findall(lua_bytes.decode("utf-8", errors="ignore")))
+                    injected = 0
+                    for d in depots:
+                        if d not in keys_dict and d in revo_keys:
+                            keys_dict[d] = revo_keys[d]
+                            injected += 1
+                    if injected > 0:
+                        print(Fore.GREEN + f"\u2705 revobd.club: Injected {injected} key(s) for {app_id}" + Style.RESET_ALL)
+                        found = 0
+                        for d in depots:
+                            if keys_dict.get(d):
+                                found += 1
+                        if found > 0:
+                            # Append every depotless DLC the game declares so
+                            # LumaCore marks them as owned alongside the keyed
+                            # depots above.
+                            lua_path = dest / f"{app_id}.lua"
+                            lua_path.write_text(
+                                _build_lua_from_provider(app_id, app_info.get("common", {}).get("name", ""), depots, keys_dict, dlc_app_ids, manifest_map, manifest_sizes, app_info),
+                                encoding="utf-8",
+                            )
+                            print(Fore.GREEN + f"\u2705 Built Lua for {app_id} using revobd.club keys ({found} depot(s))" + Style.RESET_ALL)
+                            return lua_path
+            print(Fore.YELLOW + f"revobd.club: No usable keys for {app_id} (HTTP {revo_resp.status_code})." + Style.RESET_ALL)
+        except Exception as e:
+            print(Fore.YELLOW + f"revobd.club unreachable ({e})." + Style.RESET_ALL)
+        return None
+
+    # Append every depotless DLC the game declares so LumaCore marks them as
+    # owned alongside the keyed depots above. Skipping the base appid and any
+    # id that already appears as a depot avoids duplicates.
+    appended_dlcs = len([d for d in dlc_app_ids if d != str(app_id) and d not in depots])
+
+    lua_path = dest / f"{app_id}.lua"
+    with lua_path.open("w", encoding="utf-8") as f:
+        f.write(_build_lua_from_provider(app_id, app_info.get("common", {}).get("name", ""), depots, keys_dict, dlc_app_ids, manifest_map, manifest_sizes, app_info))
+
+    try:
+        from sff.lua.dlc_appid_enricher import append_depotless_dlcs
+        append_depotless_dlcs(lua_path, app_id)
+    except Exception:
+        pass
+
+    if appended_dlcs:
+        print(Fore.GREEN + f"[OK] Built custom Lua for {app_id} (Resolved {found} keys natively, +{appended_dlcs} DLC appid(s))" + Style.RESET_ALL)
+    else:
+        print(Fore.GREEN + f"[OK] Built custom Lua for {app_id} (Resolved {found} keys natively)" + Style.RESET_ALL)
+    return lua_path
+
+
+def get_hubcap(dest, app_id, depotcache = None, hubcap_key = None):
+    if not app_id or not str(app_id).strip().isdigit():
+        print(Fore.RED + f"Invalid App ID: '{app_id}'" + Style.RESET_ALL)
+        return None
+    url = f"https://hubcapmanifest.com/api/v1/manifest/{app_id}"
+
+    # Loop to allow retry with new API key
+    _attempts = 0
+    _max_attempts = 3
+    while True:
+        if hubcap_key:
+            pass  # pre-validated key passed in — skip prompt/validation
+        elif not (hubcap_key := get_setting(Settings.HUBCAP_KEY)):
+            hubcap_key = prompt_secret(
+                "Paste your Hubcap API key here: ",
+                lambda x: x.startswith("smm"),
+                "That's not a Hubcap API key!",
+                long_instruction=(
+                    "Go to the Hubcap Manifest website and request an API key. It's free."
+                ),
+            ).strip()
+            if not hubcap_key:
+                print(Fore.YELLOW + "No Hubcap API key entered — skipping Hubcap." + Style.RESET_ALL)
+                return None
+            set_setting(Settings.HUBCAP_KEY, hubcap_key)
+        headers = {
+            "Authorization": f"Bearer {hubcap_key}",
+        }
+        try:
+            stats_resp = httpx.get(
+                "https://hubcapmanifest.com/api/v1/user/stats",
+                headers=headers,
+                timeout=15,
+                follow_redirects=True,
+            )
+        except httpx.ConnectError:
+            print(
+                Fore.RED
+                + "\nNetwork error: Cannot reach Hubcap Manifest API."
+                  " Check your internet connection."
+                + Style.RESET_ALL
+            )
+            return None
+        except httpx.RequestError as e:
+            print(Fore.RED + f"\nNetwork error connecting to Hubcap Manifest: {e}" + Style.RESET_ALL)
+            return None
+        if stats_resp.status_code == 401:
+            print(Fore.RED + "\nHubcap API key is invalid or expired." + Style.RESET_ALL)
+            _attempts += 1
+            if _attempts >= _max_attempts:
+                print(Fore.YELLOW + f"Max API key entry attempts ({_max_attempts}) reached. Please update your key in Settings." + Style.RESET_ALL)
+                return None
+            if prompt_confirm("Do you want to enter a new API key?"):
+                set_setting(Settings.HUBCAP_KEY, "")
+                hubcap_key = ""
+                continue
+            else:
+                print(Fore.YELLOW + "\nYou can update your API key in Settings later." + Style.RESET_ALL)
+                return None
+        elif stats_resp.status_code != 200:
+            detail = ""
+            try:
+                detail = stats_resp.json().get("detail", "")
+            except Exception:
+                pass
+            if detail:
+                print(Fore.RED + f"\nHubcap error: {detail}" + Style.RESET_ALL)
+                if "discord" in detail.lower():
+                    print(
+                        Fore.YELLOW
+                        + "You must be a member of the Hubcap Discord server to use this API.\n"
+                          "Join at: https://discord.gg/hubcap — then re-authenticate to get a valid key."
+                        + Style.RESET_ALL
+                    )
+                elif "state" in detail.lower():
+                    print(
+                        Fore.YELLOW
+                        + "OAuth state error — your authentication session expired or was already used.\n"
+                          "Go to https://hubcapmanifest.com and log in again to get a fresh API key."
+                        + Style.RESET_ALL
+                    )
+            else:
+                print(
+                    Fore.RED
+                    + f"\nHubcap Manifest API returned HTTP {stats_resp.status_code}."
+                    + Style.RESET_ALL
+                )
+            return None
+        data = stats_resp.json()
+        break
+
+    usage = data.get("daily_usage")
+    limit = data.get("daily_limit")
+    state = data.get("can_make_requests")
+
+    if not state:
+        print(
+            Fore.RED
+            + f"Daily limit exceeded! You used {usage}/{limit}"
+            + Style.RESET_ALL
+        )
+        return None
+    else:
+        logger.debug(f"Downloading lua files from {url}")
+        lua_bytes = b''
+        while True:
+            with download_to_tempfile(url, headers) as tf:
+                if tf is None:
+                    if prompt_confirm("Try again?"):
+                        continue
+                    break
+                data = tf.read()
+                print(
+                    Fore.GREEN
+                    + f"Hubcap Daily Limit: {usage+1}/{limit}"
+                    + Style.RESET_ALL
+                )
+                lua_bytes = read_lua_from_zip(io.BytesIO(data), decode=False, depotcache=depotcache)
+                if lua_bytes is None:
+                    # Try to decode server response for a useful error message.
+                    # Hubcap sometimes returns an HTML 404 page (or Cloudflare
+                    # interstitial) wrapped in HTTP 200. Detect that shape
+                    # specifically so users get a clear "not on Hubcap" line
+                    # instead of a wall of HTML in the log.
+                    try:
+                        decoded = data.decode("utf-8", errors="replace")
+                    except Exception:
+                        decoded = repr(data[:200])
+                    stripped = decoded.lstrip().lower()
+                    looks_html = stripped.startswith("<!doctype") or stripped.startswith("<html")
+                    if looks_html:
+                        if "page not found" in decoded.lower() or "page-not-found" in decoded.lower():
+                            print(
+                                Fore.RED
+                                + f"Hubcap: app {app_id} is not in the Hubcap database. "
+                                "Try Ryuu or oureveryday for this game."
+                                + Style.RESET_ALL
+                            )
+                        else:
+                            print(
+                                Fore.RED
+                                + "Hubcap returned an HTML page instead of a Lua zip "
+                                "(rate limit, Cloudflare challenge, or service down). "
+                                "Try again in a minute or pick a different provider."
+                                + Style.RESET_ALL
+                            )
+                        break
+                    try:
+                        parsed = json.loads(decoded)
+                        print(
+                            Fore.RED
+                            + json.dumps(parsed, indent=2)
+                            + Style.RESET_ALL
+                        )
+                    except json.JSONDecodeError:
+                        print(
+                            "Did not receive a ZIP file or JSON:\n"
+                            + decoded[:500]
+                        )
+            break
+        lua_path = dest / f"{app_id}.lua"
+        if lua_bytes:
+            with lua_path.open("wb") as f:
+                f.write(lua_bytes)
+            _update_fallback_depotkeys(lua_bytes)
+            try:
+                from sff.lua.dlc_appid_enricher import append_depotless_dlcs
+                appended = append_depotless_dlcs(lua_path, app_id)
+                if appended:
+                    logger.debug(
+                        "hubcap: appended %d depotless dlc line(s) for %s",
+                        appended, app_id,
+                    )
+            except Exception as e:
+                logger.debug("hubcap: dlc enricher raised for %s: %s", app_id, e)
+            return lua_path
+        return None
+
+
+def get_ryuu(dest, app_id, depotcache=None, request_update=None, branch=None, file_type=None):
+    if not app_id or not str(app_id).strip().isdigit():
+        print(Fore.RED + f"Invalid App ID: '{app_id}'" + Style.RESET_ALL)
+        return None
+
+    branch = (branch or "").strip() or "public"
+    file_type = (file_type or "").strip().lower() or "zip"
+
+    max_attempts = 3
+    attempt = 0
+    while attempt < max_attempts:
+        reseller_key = get_setting(Settings.RYUU_KEY) or ""
+        premium_key = get_setting(Settings.RYUU_API_KEY) or ""
+        is_premium = False
+
+        if reseller_key and premium_key:
+            choice = prompt_select(
+                "Which Ryuu key type do you want to use?",
+                [("Reseller (auth_code)", "reseller"),
+                 ("Premium (X-Auth-Key)", "premium")],
+                cancellable=False,
+            )
+            is_premium = (choice == "premium")
+        elif premium_key:
+            is_premium = True
+        elif reseller_key:
+            is_premium = False
+        else:
+            choice = prompt_select(
+                "What type of Ryuu key do you have?",
+                [("Reseller key", "reseller"),
+                 ("Premium API key", "premium")],
+                cancellable=True,
+            )
+            if choice is None:
+                return None
+            is_premium = (choice == "premium")
+
+        ryuu_key = premium_key if is_premium else reseller_key
+        if not ryuu_key:
+            prompt_msg = (
+                "Paste your Ryuu premium API key:"
+                if is_premium else
+                "Paste your Ryuu reseller key:"
+            )
+            ryuu_key = prompt_secret(
+                prompt_msg,
+                lambda x: bool(x.strip()),
+                "API key cannot be empty.",
+                long_instruction="Contact Ryuu staff to get an API key.",
+            ).strip()
+            if not ryuu_key:
+                return None
+            if is_premium:
+                set_setting(Settings.RYUU_API_KEY, ryuu_key)
+            else:
+                set_setting(Settings.RYUU_KEY, ryuu_key)
+
+        # Route to correct endpoint based on type
+        if is_premium:
+            lua_bytes = _ryuu_download_new(app_id, ryuu_key, branch, file_type)
+        else:
+            lua_bytes = _ryuu_download_old(app_id, ryuu_key, dest, depotcache, file_type)
+        if lua_bytes is not None:
+            return _ryuu_save_lua(lua_bytes, dest, app_id)
+
+        # If chosen endpoint failed, try the other one
+        if is_premium:
+            lua_bytes = _ryuu_download_old(app_id, ryuu_key, dest, depotcache, file_type)
+        else:
+            lua_bytes = _ryuu_download_new(app_id, ryuu_key, branch, file_type)
+        if lua_bytes is not None:
+            return _ryuu_save_lua(lua_bytes, dest, app_id)
+
+        attempt += 1
+        print(Fore.RED + f"ryuu: both endpoints failed (Attempt {attempt}/{max_attempts})" + Style.RESET_ALL)
+        if attempt >= max_attempts:
+            print(Fore.RED + "Ryuu: Max attempts reached. Check your API key in Settings." + Style.RESET_ALL)
+            return None
+        if prompt_confirm("Do you want to enter a new API key?"):
+            set_setting(Settings.RYUU_KEY, "")
+            set_setting(Settings.RYUU_API_KEY, "")
+            continue
+        return None
+    return None
+
+
+def _ryuu_download_old(app_id, ryuu_key, dest, depotcache, file_type):
+    """Old endpoint: auth_code URL param. Works for normal users."""
+    url = "https://generator.ryuu.lol/secure_download"
+    params = {"appid": str(app_id), "auth_code": ryuu_key}
+    if file_type == "lua":
+        url = "https://generator.ryuu.lol/resellerlua"
+    try:
+        resp = httpx.get(url, params=params, timeout=60, follow_redirects=True)
+    except Exception:
+        return None
+    if resp.status_code != 200:
+        return None
+    return _ryuu_extract_lua(resp, depotcache, file_type)
+
+
+def _ryuu_download_new(app_id, ryuu_key, branch="public", file_type="zip"):
+    """New endpoint: X-Auth-Key header. Works for premium users."""
+    headers = {"X-Auth-Key": ryuu_key}
+    params: dict = {"branch": branch}
+    if file_type != "zip":
+        params["file_type"] = file_type
+    try:
+        resp = httpx.get(
+            "https://generator.ryuu.lol/api/download/" + str(app_id),
+            params=params, headers=headers, timeout=60, follow_redirects=True,
+        )
+    except Exception:
+        return None
+    if resp.status_code != 200:
+        return None
+    return _ryuu_extract_lua(resp, None, file_type)
+
+
+def _ryuu_extract_lua(resp, depotcache, file_type):
+    if file_type == "lua":
+        return resp.content
+    return read_lua_from_zip(io.BytesIO(resp.content), decode=False, depotcache=depotcache)
+
+
+def _ryuu_save_lua(lua_bytes, dest, app_id):
+    if lua_bytes is None:
+        print(Fore.RED + "Ryuu: downloaded but no .lua content found." + Style.RESET_ALL)
+        return None
+    lua_path = dest / f"{app_id}.lua"
+    with lua_path.open("wb") as f:
+        f.write(lua_bytes)
+    _update_fallback_depotkeys(lua_bytes)
+    try:
+        from sff.lua.dlc_appid_enricher import append_depotless_dlcs
+        append_depotless_dlcs(lua_path, app_id)
+    except Exception:
+        pass
+    print(Fore.GREEN + f"[OK] Ryuu: Downloaded Lua for {app_id}" + Style.RESET_ALL)
+    return lua_path
+
+
+def get_depotbox(dest, app_id, depotbox_key=None):
+    """Download a .lua file from DepotBox.
+    Uses the direct-lua endpoint which returns just the .lua text.
+    Requires a DepotBox API key. Rate limit: 60/min (Starter) or 120/min (Pro).
+    """
+    if not app_id or not str(app_id).strip().isdigit():
+        print(Fore.RED + f"Invalid App ID: '{app_id}'" + Style.RESET_ALL)
+        return None
+
+    if not depotbox_key:
+        from sff.core.storage.settings import get_setting
+        depotbox_key = get_setting(Settings.DEPOTBOX_KEY)
+        if not depotbox_key:
+            depotbox_key = prompt_secret(
+                "Paste your DepotBox API key here: ",
+                lambda x: len(x.strip()) >= 20,
+                "That doesn't look like a DepotBox API key!",
+                long_instruction=(
+                    "Get an API key from https://depotbox.org — Starter (60 req/min) or Pro (120 req/min)."
+                ),
+            ).strip()
+            set_setting(Settings.DEPOTBOX_KEY, depotbox_key)
+
+    # Check rate limit plan
+    from sff.core.storage.settings import get_setting
+    rate_limit_str = get_setting(Settings.DEPOTBOX_RATE_LIMIT) or ""
+    rate_limit = int(rate_limit_str) if rate_limit_str.strip().isdigit() else None
+    if rate_limit is None:
+        from sff.ui.prompts import prompt_select
+        plan = prompt_select(
+            "Select your DepotBox plan:",
+            [("Starter — 60 requests / minute", 60), ("Pro — 120 requests / minute", 120)],
+            cancellable=False,
+        )
+        rate_limit = plan if plan else 60
+        set_setting(Settings.DEPOTBOX_RATE_LIMIT, str(rate_limit))
+
+    headers = {"X-API-Key": depotbox_key}
+    url = f"https://depotbox.org/api/direct-lua?appid={app_id}"
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=(10, 300), follow_redirects=True)
+        if resp.status_code == 401:
+            print(Fore.RED + "DepotBox: Invalid API key." + Style.RESET_ALL)
+            set_setting(Settings.DEPOTBOX_KEY, "")
+            return None
+        if resp.status_code == 403:
+            print(Fore.RED + f"DepotBox: {resp.text[:300]}" + Style.RESET_ALL)
+            return None
+        if resp.status_code == 404:
+            print(Fore.YELLOW + f"DepotBox: No depot keys for App {app_id}. Try another provider." + Style.RESET_ALL)
+            return None
+        if resp.status_code == 429:
+            print(Fore.YELLOW + f"DepotBox: Rate limit ({rate_limit}/min) exceeded. {resp.text[:200]}" + Style.RESET_ALL)
+            return None
+        if resp.status_code != 200:
+            print(Fore.RED + f"DepotBox: HTTP {resp.status_code} — {resp.text[:300]}" + Style.RESET_ALL)
+            return None
+
+        lua_text = resp.text.strip()
+        if not lua_text or not lua_text.startswith("--"):
+            print(Fore.RED + "DepotBox: Response doesn't look like a valid .lua file." + Style.RESET_ALL)
+            return None
+
+        lua_path = dest / f"{app_id}.lua"
+        lua_path.write_text(lua_text, encoding="utf-8")
+        _update_fallback_depotkeys(lua_text.encode("utf-8"))
+        try:
+            from sff.lua.dlc_appid_enricher import append_depotless_dlcs
+            append_depotless_dlcs(lua_path, app_id)
+        except Exception:
+            pass
+        print(Fore.GREEN + f"[OK] DepotBox: Downloaded Lua for {app_id}" + Style.RESET_ALL)
+        return lua_path
+
+    except httpx.ConnectError:
+        print(Fore.RED + "DepotBox: Cannot connect. Check your internet." + Style.RESET_ALL)
+        return None
+    except Exception as e:
+        print(Fore.RED + f"DepotBox: Error — {e}" + Style.RESET_ALL)
+        return None
+
+
+_BD_TONE_A = bytes([94, 42, 145, 199, 51, 141, 162, 17])
+_BD_TONE_B = bytes([167, 78, 212, 25, 124, 240, 109, 8])
+_BD_TONE_C = bytes([71, 83, 239, 42, 145, 191, 51, 197])
+_BD_TONE_D = bytes([109, 8, 167, 94, 212, 25, 124, 240])
+_BD_PART_0 = bytes([58, 72, 233, 183, 65, 228, 212, 78])
+_BD_PART_1 = bytes([196, 43, 228, 123, 73, 200, 90, 63])
+_BD_PART_2 = bytes([116, 69, 118, 70, 69, 70, 75, 72])
+_BD_PART_3 = bytes([246, 11, 141, 162, 25, 223, 96, 127])
+_BD_PART_4 = bytes([43, 94, 93, 49, 45, 45, 44, 46])
+_BD_PART_5 = bytes([98, 53, 102, 52, 98, 97, 57, 51])
+_BD_PART_6 = bytes([93, 48, 147, 105, 227, 32, 26, 199])
+
+
+def _resolve_build_details_key():
+    """Resolve the build-details access token. A deployed override takes
+    precedence; otherwise the built-in token is reassembled on demand."""
+    import os
+    override = os.environ.get("STEAMIDRA_BUILD_TOKEN")
+    if override and override.strip():
+        return override.strip()
+    p0 = "".join(chr(b ^ _BD_TONE_A[i % 8]) for i, b in enumerate(_BD_PART_0))
+    p1 = "".join(chr(b ^ _BD_TONE_B[i % 8]) for i, b in enumerate(_BD_PART_1))[::-1]
+    p2 = "".join(chr(b - 19) for b in _BD_PART_2)
+    p3 = "".join(chr(b ^ _BD_TONE_C[i % 8]) for i, b in enumerate(_BD_PART_3[::-1]))
+    p4 = "".join(chr(b + 7) for b in _BD_PART_4)
+    p5 = "".join(chr(b) for b in _BD_PART_5)[::-1]
+    p6 = "".join(chr(b ^ _BD_TONE_D[i % 8]) for i, b in enumerate(_BD_PART_6))
+    return p0 + p1 + p2 + p3 + p4 + p5 + p6
+
+
+def fetch_build_details(build_id):
+    build_id = str(build_id).strip()
+    if not build_id.isdigit() or build_id == "0" or len(build_id) > 12:
+        return None
+    url = f"https://depotbox.org/api/depotboxtool/v1/build-details?build_id={build_id}"
+    headers = {"x-api-key": _resolve_build_details_key()}
+    try:
+        resp = httpx.get(url, headers=headers, timeout=(10, 120), follow_redirects=True)
+    except Exception:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not data.get("success"):
+        return None
+    pins = {}
+    try:
+        entries = data.get("depots") or []
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            depot = str(entry.get("depot_id", "")).strip()
+            manifest = str(entry.get("manifest_id", "")).strip()
+            if (
+                depot.isdigit() and manifest.isdigit()
+                and len(depot) <= 12 and len(manifest) <= 22
+            ):
+                pins[depot] = manifest
+    except Exception:
+        return None
+    return pins or None

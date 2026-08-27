@@ -1,0 +1,26 @@
+4u4free.PlaytimeIdler 0.5.0 provenance
+
+This executable is a custom 4u4free component. It is not part of the official
+Steam Achievement Manager release and must not be attributed to SAM's author.
+
+Source files:
+  tools/playtime_idler/Program.cs
+  tools/playtime_idler/4u4free.PlaytimeIdler.csproj
+
+Component license:
+  GPL-3.0-or-later (see the repository LICENSE file)
+
+Build command:
+  dotnet build tools/playtime_idler/4u4free.PlaytimeIdler.csproj -c Release -p:Platform=x86 --nologo
+
+Build SDK used for this release:
+  .NET SDK 10.0.400
+
+Runtime dependency:
+  Unmodified SAM.API.dll from Steam Achievement Manager 7.0.41, source commit
+  de8b71048a0cee3c3e97cd8535e0f55ca86513e4, distributed under the zlib
+  license in LICENSE.txt.
+
+SHA-256:
+  d94a5b113504db6c01fa52c4b3859fdc051bd6f4d934319edbe661f45a34dddf  4u4free.PlaytimeIdler.exe
+  051099983b896673909e01a1f631b6652abb88da95c9f06f3efef4be033091fa  4u4free.PlaytimeIdler.exe.config

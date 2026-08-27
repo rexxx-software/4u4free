@@ -1,0 +1,48 @@
+# SteaMidra - Steam game setup and manifest tool (SFF)
+# Copyright (c) 2025-2026 Midrag (https://github.com/Midrags)
+#
+# This file is part of SteaMidra.
+#
+# SteaMidra is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# SteaMidra is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with SteaMidra.  If not, see <https://www.gnu.org/licenses/>.
+
+import logging
+from pathlib import Path
+import yaml
+
+logger = logging.getLogger(__name__)
+
+
+def _read_yaml_file(path: Path):
+    with path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _write_yaml_file(path: Path, data):
+    text = yaml.dump(data)
+    path.write_text(text, encoding="utf-8")
+
+
+class YAMLParser:
+    def __init__(self, path):
+        self.path = path
+
+    def read(self):
+        try:
+            return _read_yaml_file(self.path)
+        except Exception as exc:
+            logger.warning("Failed to read YAML config %s: %s", self.path, exc)
+            return None
+
+    def write(self, data):
+        _write_yaml_file(self.path, data)

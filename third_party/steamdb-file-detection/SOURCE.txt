@@ -1,0 +1,6 @@
+Project: SteamDB File Detection Rule Sets
+Repository: https://github.com/SteamDatabase/FileDetectionRuleSets
+Commit: 243cf741921d2c8fd6b844f83831edf4692cf788
+License: MIT (see LICENSE)
+rules.ini SHA-256: 2111ef58d457021d1a9ce1f83258e119f8ac973c6d2769b18bc6a3d47c7630cb
+LICENSE SHA-256: 04abe82cadc2a7584fe65a39bb3e4dad20fd4f73b28ba275335787ff748675ca
