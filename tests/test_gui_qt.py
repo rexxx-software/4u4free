@@ -560,6 +560,17 @@ class QtGuiTests(unittest.TestCase):
                             {"key": "creamapi", "name": "CreamAPI", "installed": True}
                         ],
                     ),
+                    patch(
+                        "four_u_four_free.gui_qt.default_data_dir",
+                        return_value=game_dir / "app-data",
+                    ),
+                    patch.object(
+                        window,
+                        "_steam_root",
+                        side_effect=AssertionError(
+                            "Steam root should not be required without saved metadata"
+                        ),
+                    ),
                 ):
                     window._confirm_dlc_install()
                     deadline = time.monotonic() + 3

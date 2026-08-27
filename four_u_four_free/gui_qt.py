@@ -1500,7 +1500,6 @@ class MainWindow(QMainWindow):
             return
 
         row_key = f"dlc:{app_id}"
-        steam_root = self._steam_root()
 
         def update_setup(progress: int, status: str) -> None:
             self.events.download.emit(
@@ -1520,6 +1519,7 @@ class MainWindow(QMainWindow):
 
         def task():
             steam_closed_for_metadata = False
+            steam_root = None
             try:
                 ok = install_unlocker(
                     folder,
@@ -1545,6 +1545,7 @@ class MainWindow(QMainWindow):
                 steam_ready = False
                 lua_source = default_data_dir() / "saved_lua" / f"{app_id}.lua"
                 if lua_source.is_file():
+                    steam_root = self._steam_root()
                     if is_proc_running("steam.exe"):
                         update_setup(55, "Restarting Steam for entitlement metadata")
                         subprocess.run(
@@ -1611,7 +1612,11 @@ class MainWindow(QMainWindow):
                     "steam_ready": steam_ready,
                 }
             except Exception as exc:
-                if steam_closed_for_metadata and not is_proc_running("steam.exe"):
+                if (
+                    steam_closed_for_metadata
+                    and steam_root is not None
+                    and not is_proc_running("steam.exe")
+                ):
                     launch_steam_unelevated(steam_root / "steam.exe", steam_root)
                 update_setup(0, f"Failed: {exc}")
                 raise
