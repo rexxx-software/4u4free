@@ -1519,22 +1519,24 @@ class MainWindow(QMainWindow):
                 raise
 
         def done(_ok):
-            status = f"Installed and verified · {len(dlc_ids)} DLC entries"
+            status = f"Files installed · {len(dlc_ids)} DLC entries"
             update_setup(100, status)
             self.log(
-                f"Installed and verified {UNLOCKER_LABELS[key]} for {game_name} "
+                f"Installed {UNLOCKER_LABELS[key]} files for {game_name} "
                 f"({len(dlc_ids)} DLC entries) in {folder}"
             )
             self.dlc_summary.setText(
-                f"{UNLOCKER_LABELS[key]} installed and verified  /  "
-                f"{len(dlc_ids)} DLC entries configured"
+                f"{UNLOCKER_LABELS[key]} files installed  /  "
+                f"{len(dlc_ids)} DLC entries configured  /  Verify in game"
             )
-            self._set_status(f"DLC setup complete for {game_name}")
+            self._set_status(f"DLC files installed for {game_name}")
             QMessageBox.information(
                 self,
-                "DLC setup complete",
-                f"{UNLOCKER_LABELS[key]} was installed and verified for {game_name}.\n\n"
+                "DLC files installed",
+                f"{UNLOCKER_LABELS[key]} files were installed for {game_name}.\n\n"
                 f"Configured entries: {len(dlc_ids)}\n"
+                "4u4free verified the local configuration and backup, not the game's "
+                "runtime entitlement result.\n\n"
                 "Restart the game now. Do not wait for a Steam update: a local unlocker "
                 "does not create one. DLC files with separate depots are installed by "
                 "Steam only when the signed-in account owns them.",

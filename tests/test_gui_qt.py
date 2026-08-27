@@ -563,14 +563,14 @@ class QtGuiTests(unittest.TestCase):
                 information.assert_called_once()
                 self.assertEqual(window.download_table.rowCount(), 1)
                 self.assertIn(
-                    "Installed and verified",
+                    "Files installed",
                     window.download_table.item(0, 2).text(),
                 )
                 self.assertEqual(window.download_table.cellWidget(0, 3).value(), 100)
                 self.assertEqual(
                     window.download_table.cellWidget(0, 5).text(), "Open folder"
                 )
-                self.assertIn("installed and verified", window.dlc_summary.text())
+                self.assertIn("Verify in game", window.dlc_summary.text())
             finally:
                 window.close()
 

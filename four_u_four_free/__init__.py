@@ -1,3 +1,3 @@
 """4u4free CLI foundation."""
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"

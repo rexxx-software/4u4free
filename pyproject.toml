@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "4u4free"
-version = "0.5.3"
+version = "0.5.4"
 description = "A desktop and command-line toolkit for inspecting, backing up, and managing local Steam libraries"
 readme = "README.md"
 requires-python = ">=3.10"

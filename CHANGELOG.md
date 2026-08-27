@@ -2,6 +2,11 @@
 
 Notable changes to 4u4free are recorded here.
 
+## 0.5.4
+
+- Changed DLC completion reporting to distinguish verified local files from
+  runtime entitlement, which must be checked inside each game.
+
 ## 0.5.3
 
 - Simplified DLC setup to an installed-game dropdown with automatic App ID and
