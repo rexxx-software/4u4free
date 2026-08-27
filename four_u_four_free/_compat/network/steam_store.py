@@ -76,7 +76,11 @@ def get_app_details_from_store(app_id):
     if not isinstance(dlc, list):
         dlc = []
     dlc_ids = [int(x) for x in dlc if isinstance(x, (int, str)) and str(x).isdigit()]
-    return {"name": name, "dlc": dlc_ids}
+    return {
+        "name": name,
+        "type": str(inner.get("type") or "").strip().lower(),
+        "dlc": dlc_ids,
+    }
 
 
 def get_dlc_list_from_store(base_id):
@@ -90,21 +94,32 @@ def get_dlc_list_from_store(base_id):
     return (details["name"] or f"App {base_id}", details["dlc"])
 
 
-def get_dlc_names_from_store(dlc_ids):
+def get_dlc_details_from_store(dlc_ids):
     """
-    Fetch DLC names from Store API (one request per id, with short delay).
-    Returns dict mapping app_id -> name; missing names are "DLC <id>".
+    Fetch DLC names and app types from Store API (one request per id).
     """
     result = {}
     for i, app_id in enumerate(dlc_ids):
         if i > 0:
             time.sleep(_STORE_API_DELAY)
         details = get_app_details_from_store(app_id)
-        if details and details.get("name"):
-            result[app_id] = details["name"]
-        else:
-            result[app_id] = f"DLC {app_id}"
+        result[app_id] = {
+            "name": (
+                str(details.get("name"))
+                if details and details.get("name")
+                else f"DLC {app_id}"
+            ),
+            "type": str(details.get("type") or "") if details else "",
+        }
     return result
+
+
+def get_dlc_names_from_store(dlc_ids):
+    """Return Steam DLC names keyed by App ID."""
+    return {
+        app_id: details["name"]
+        for app_id, details in get_dlc_details_from_store(dlc_ids).items()
+    }
 
 
 def get_app_name_from_store(app_id):

@@ -1182,17 +1182,26 @@ class MainWindow(QMainWindow):
             bar = QProgressBar()
             bar.setTextVisible(True)
             self.download_table.setCellWidget(row, 3, bar)
-            install = QPushButton("Install in Steam")
-            install.setToolTip(
-                "Ask the official Steam client to install this App ID. "
-                "The signed-in account must own or have activated it."
-            )
-            install.clicked.connect(
-                lambda _checked=False, current_id=str(data["app_id"]), current_name=str(data["name"]): (
-                    self._open_official_steam_install(current_id, current_name)
+            if data.get("action") == "open-folder":
+                action = QPushButton("Open folder")
+                action.setToolTip("Open the local game folder changed by this setup.")
+                action.clicked.connect(
+                    lambda _checked=False, folder=str(data.get("folder") or ""): (
+                        self._open_local_folder(folder)
+                    )
                 )
-            )
-            self.download_table.setCellWidget(row, 5, install)
+            else:
+                action = QPushButton("Install in Steam")
+                action.setToolTip(
+                    "Ask the official Steam client to install this App ID. "
+                    "The signed-in account must own or have activated it."
+                )
+                action.clicked.connect(
+                    lambda _checked=False, current_id=str(data["app_id"]), current_name=str(data["name"]): (
+                        self._open_official_steam_install(current_id, current_name)
+                    )
+                )
+            self.download_table.setCellWidget(row, 5, action)
         row = self._download_rows[key]
         self.download_table.setItem(row, 2, QTableWidgetItem(str(data["status"])))
         self.download_table.setItem(row, 4, QTableWidgetItem(str(data["time"])))
@@ -1222,6 +1231,13 @@ class MainWindow(QMainWindow):
         )
         self._set_status(f"Install request sent to Steam for App {normalized}")
 
+    def _open_local_folder(self, folder: str) -> None:
+        path = Path(folder)
+        if not path.is_dir():
+            QMessageBox.warning(self, "Open folder", "The local game folder was not found.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
     # ---- DLC -----------------------------------------------------------
 
     def _build_dlc_page(self) -> QWidget:
@@ -1241,45 +1257,30 @@ class MainWindow(QMainWindow):
         game_label = QLabel("Installed game")
         game_label.setObjectName("fieldLabel")
         self.dlc_game_select = QComboBox()
-        self.dlc_game_select.setEditable(True)
-        self.dlc_game_select.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.dlc_game_select.setPlaceholderText(
-            "Choose a game from your Steam libraries"
-        )
+        self.dlc_game_select.setMinimumWidth(260)
         self.dlc_game_select.currentIndexChanged.connect(self._select_dlc_game)
-        folder_label = QLabel("Game folder")
-        folder_label.setObjectName("fieldLabel")
-        self.dlc_folder = QLineEdit()
-        self.dlc_folder.setPlaceholderText("Select the installed game's folder")
-        browse = QPushButton("Browse")
-        browse.clicked.connect(lambda: self._pick_directory(self.dlc_folder))
-        app_label = QLabel("App ID")
-        app_label.setObjectName("fieldLabel")
-        self.dlc_app_id = QLineEdit()
-        self.dlc_app_id.setPlaceholderText("e.g. 233450")
-        self.dlc_app_id.setMaximumWidth(180)
-        check = QPushButton("Check DLC")
-        check.setObjectName("primaryButton")
-        check.clicked.connect(self._check_dlc)
+        self.dlc_refresh_button = QPushButton("Refresh DLC")
+        self.dlc_refresh_button.clicked.connect(self._check_dlc)
         form.addWidget(game_label, 0, 0)
-        form.addWidget(self.dlc_game_select, 0, 1, 1, 2)
-        form.addWidget(folder_label, 1, 0)
-        form.addWidget(self.dlc_folder, 1, 1)
-        form.addWidget(browse, 1, 2)
-        form.addWidget(app_label, 2, 0)
-        form.addWidget(self.dlc_app_id, 2, 1)
-        form.addWidget(check, 2, 2)
+        form.addWidget(self.dlc_game_select, 0, 1)
+        form.addWidget(self.dlc_refresh_button, 0, 2)
+        detected_note = QLabel(
+            "App ID and install folder are detected automatically from your Steam libraries."
+        )
+        detected_note.setObjectName("muted")
+        detected_note.setWordWrap(True)
+        form.addWidget(detected_note, 1, 1, 1, 2)
         form.setColumnStretch(1, 1)
         layout.addWidget(target)
 
-        self.dlc_summary = QLabel("Enter an App ID to load its DLC catalog.")
+        self.dlc_summary = QLabel("Choose an installed game to load its DLC catalog.")
         self.dlc_summary.setObjectName("muted")
         layout.addWidget(self.dlc_summary)
 
         self.dlc_table = DataTable(
             0,
             3,
-            "Choose an installed game, then select Check DLC to load its public catalog.",
+            "Choose an installed Steam game to load its public DLC catalog.",
         )
         self.dlc_table.setHorizontalHeaderLabels(["Use", "DLC App ID", "Name"])
         self.dlc_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1298,24 +1299,25 @@ class MainWindow(QMainWindow):
         self.dlc_unlocker = QComboBox()
         for key, label in UNLOCKER_LABELS.items():
             self.dlc_unlocker.addItem(label, key)
-        inspect = QPushButton("Inspect folder")
-        inspect.clicked.connect(self._inspect_dlc_target)
-        install = QPushButton("Install selected")
-        install.setObjectName("primaryButton")
-        install.clicked.connect(self._confirm_dlc_install)
-        uninstall = QPushButton("Uninstall")
-        uninstall.setObjectName("dangerButton")
-        uninstall.clicked.connect(self._confirm_dlc_uninstall)
+        self.dlc_inspect_button = QPushButton("Inspect folder")
+        self.dlc_inspect_button.clicked.connect(self._inspect_dlc_target)
+        self.dlc_install_button = QPushButton("Install selected")
+        self.dlc_install_button.setObjectName("primaryButton")
+        self.dlc_install_button.clicked.connect(self._confirm_dlc_install)
+        self.dlc_uninstall_button = QPushButton("Uninstall")
+        self.dlc_uninstall_button.setObjectName("dangerButton")
+        self.dlc_uninstall_button.clicked.connect(self._confirm_dlc_uninstall)
         action_layout.addWidget(unlocker_label)
         action_layout.addWidget(self.dlc_unlocker)
         action_layout.addStretch(1)
-        action_layout.addWidget(inspect)
-        action_layout.addWidget(install)
-        action_layout.addWidget(uninstall)
+        action_layout.addWidget(self.dlc_inspect_button)
+        action_layout.addWidget(self.dlc_install_button)
+        action_layout.addWidget(self.dlc_uninstall_button)
         layout.addWidget(action_panel)
         setup_note = QLabel(
-            "DLC setup updates the selected game's local API configuration; it does not "
-            "download DLC depots. The result is recorded under Downloads and Activity."
+            "DLC setup updates the selected game's local API configuration. Restart the "
+            "game afterward; Steam will not show an update unless owned DLC has a separate "
+            "depot to download. The result is recorded under Downloads and Activity."
         )
         setup_note.setObjectName("muted")
         setup_note.setWordWrap(True)
@@ -1323,38 +1325,41 @@ class MainWindow(QMainWindow):
         return page
 
     def _populate_dlc_games(self, games: list[SteamGame]) -> None:
-        selected_app_id = self.dlc_app_id.text().strip()
+        previous = self._selected_combo_game(self.dlc_game_select)
+        selected_app_id = str(previous.get("app_id") or "") if previous else ""
         self.dlc_game_select.blockSignals(True)
         self.dlc_game_select.clear()
-        selected_index = -1
+        selected_index = 0
         for index, game in enumerate(games):
-            folder = game.library / "steamapps" / "common" / game.install_dir
             self.dlc_game_select.addItem(
-                f"{game.name}  ·  {game.app_id}",
-                {
-                    "app_id": str(game.app_id),
-                    "name": game.name,
-                    "folder": str(folder),
-                },
+                f"{game.name}  ·  {game.app_id}", self._game_combo_data(game)
             )
             if str(game.app_id) == selected_app_id:
                 selected_index = index
-        self.dlc_game_select.setCurrentIndex(selected_index)
-        if selected_index < 0:
-            self.dlc_game_select.setEditText("")
+        has_games = bool(games)
+        if has_games:
+            self.dlc_game_select.setCurrentIndex(selected_index)
+        else:
+            self.dlc_game_select.addItem("No installed games found", None)
         self.dlc_game_select.blockSignals(False)
+        for button in (
+            self.dlc_refresh_button,
+            self.dlc_inspect_button,
+            self.dlc_install_button,
+            self.dlc_uninstall_button,
+        ):
+            button.setEnabled(has_games)
+        self._select_dlc_game(self.dlc_game_select.currentIndex())
 
-    def _select_dlc_game(self, index: int) -> None:
-        if index < 0:
+    def _select_dlc_game(self, _index: int) -> None:
+        game = self._selected_combo_game(self.dlc_game_select)
+        if game is None:
+            self.dlc_table.setRowCount(0)
+            self.dlc_summary.setText("Refresh the Steam library to continue.")
             return
-        game = self.dlc_game_select.itemData(index)
-        if not isinstance(game, dict):
-            return
-        self.dlc_app_id.setText(str(game.get("app_id") or ""))
-        self.dlc_folder.setText(str(game.get("folder") or ""))
-        self.dlc_summary.setText(
-            f"{game.get('name') or 'Game'} selected. Choose Check DLC to load its catalog."
-        )
+        self.dlc_table.setRowCount(0)
+        self.dlc_summary.setText(f"Loading DLC for {game['name']}…")
+        self._check_dlc()
 
     def _pick_directory(self, target: QLineEdit) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -1364,13 +1369,20 @@ class MainWindow(QMainWindow):
             target.setText(selected)
 
     def _check_dlc(self) -> None:
+        game = self._selected_combo_game(self.dlc_game_select)
+        if game is None:
+            QMessageBox.warning(self, "DLC check", "Choose an installed game first.")
+            return
         try:
-            app_id = require_app_id(self.dlc_app_id.text())
+            app_id = require_app_id(game["app_id"])
         except FourUFourFreeError as exc:
             QMessageBox.warning(self, "DLC check", str(exc))
             return
 
         def done(catalog):
+            current = self._selected_combo_game(self.dlc_game_select)
+            if current is None or current.get("app_id") != str(app_id):
+                return
             rows = catalog["dlcs"]
             self.dlc_table.setRowCount(len(rows))
             for row, dlc in enumerate(rows):
@@ -1391,6 +1403,7 @@ class MainWindow(QMainWindow):
             lambda: fetch_dlc_catalog(app_id),
             done,
             label=f"Checking DLC for App {app_id}",
+            error_modal=False,
         )
 
     def _selected_dlc_ids(self) -> list[int]:
@@ -1407,7 +1420,11 @@ class MainWindow(QMainWindow):
         return selected
 
     def _inspect_dlc_target(self) -> None:
-        folder_text = self.dlc_folder.text()
+        game = self._selected_combo_game(self.dlc_game_select)
+        if game is None:
+            QMessageBox.warning(self, "DLC inspection", "Choose an installed game first.")
+            return
+        folder_text = game["folder"]
 
         def task():
             folder = require_game_directory(folder_text)
@@ -1432,20 +1449,18 @@ class MainWindow(QMainWindow):
 
     def _confirm_dlc_install(self) -> None:
         try:
-            folder = require_game_directory(self.dlc_folder.text())
-            app_id = require_app_id(self.dlc_app_id.text())
+            selected_game = self._selected_combo_game(self.dlc_game_select)
+            if selected_game is None:
+                raise FourUFourFreeError("Choose an installed game first.")
+            folder = require_game_directory(selected_game["folder"])
+            app_id = require_app_id(selected_game["app_id"])
             dlc_ids = self._selected_dlc_ids()
             if not dlc_ids:
                 raise FourUFourFreeError(
                     "Select at least one DLC from the table first."
                 )
             key = str(self.dlc_unlocker.currentData())
-            selected_game = self.dlc_game_select.currentData()
-            game_name = (
-                str(selected_game.get("name") or f"App {app_id}")
-                if isinstance(selected_game, dict)
-                else f"App {app_id}"
-            )
+            game_name = str(selected_game.get("name") or f"App {app_id}")
         except FourUFourFreeError as exc:
             QMessageBox.warning(self, "DLC install", str(exc))
             return
@@ -1470,6 +1485,8 @@ class MainWindow(QMainWindow):
                     "status": status,
                     "progress": progress,
                     "time": time.strftime("%H:%M:%S"),
+                    "action": "open-folder",
+                    "folder": str(folder),
                 }
             )
 
@@ -1518,8 +1535,9 @@ class MainWindow(QMainWindow):
                 "DLC setup complete",
                 f"{UNLOCKER_LABELS[key]} was installed and verified for {game_name}.\n\n"
                 f"Configured entries: {len(dlc_ids)}\n"
-                "This was a local game-folder setup, so there is no Steam download "
-                "transfer to wait for. A completed entry is shown under Downloads.",
+                "Restart the game now. Do not wait for a Steam update: a local unlocker "
+                "does not create one. DLC files with separate depots are installed by "
+                "Steam only when the signed-in account owns them.",
             )
 
         self.run_task(
@@ -1530,7 +1548,10 @@ class MainWindow(QMainWindow):
 
     def _confirm_dlc_uninstall(self) -> None:
         try:
-            folder = require_game_directory(self.dlc_folder.text())
+            selected_game = self._selected_combo_game(self.dlc_game_select)
+            if selected_game is None:
+                raise FourUFourFreeError("Choose an installed game first.")
+            folder = require_game_directory(selected_game["folder"])
             key = str(self.dlc_unlocker.currentData())
         except FourUFourFreeError as exc:
             QMessageBox.warning(self, "DLC uninstall", str(exc))

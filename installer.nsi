@@ -11,10 +11,10 @@ ManifestDPIAware true
 !define APP_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\4u4free"
 
 !ifndef VERSION
-    !define VERSION "0.5.2"
+    !define VERSION "0.5.3"
 !endif
 !ifndef VERSION4
-    !define VERSION4 "0.5.2.0"
+    !define VERSION4 "0.5.3.0"
 !endif
 
 Name "${APP_NAME}"

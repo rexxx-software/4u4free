@@ -75,16 +75,7 @@ class SmokeAPIUnlocker(UnlockerBase):
         return "SmokeAPI"
 
     def is_installed(self, game_dir):
-        for backup_path in game_dir.rglob(f"*{self.BACKUP_SUFFIX}.dll"):
-            backup_name = backup_path.name
-            if backup_name.startswith("steam_api64") or backup_name.startswith(
-                "steam_api"
-            ):
-                logger.debug(
-                    f"Found SmokeAPI backup: {backup_path.relative_to(game_dir)}"
-                )
-                return True
-        return False
+        return any(game_dir.rglob(self.CONFIG_FILENAME))
 
     def _detect_architecture(self, game_dir):
         return detect_steam_architecture(game_dir, self.BACKUP_SUFFIX)

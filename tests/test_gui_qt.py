@@ -28,7 +28,7 @@ class QtGuiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_installed_game_selection_fills_dlc_inputs(self):
+    def test_installed_game_selection_resolves_dlc_target_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             library = Path(directory)
             folder = library / "steamapps" / "common" / "Example Game"
@@ -44,10 +44,18 @@ class QtGuiTests(unittest.TestCase):
             )
             window = MainWindow(auto_start=False)
             try:
-                window._populate_dlc_games([game])
-                window.dlc_game_select.setCurrentIndex(0)
-                self.assertEqual(window.dlc_app_id.text(), "12345")
-                self.assertEqual(Path(window.dlc_folder.text()), folder)
+                with patch.object(window, "_check_dlc") as check_dlc:
+                    window._populate_dlc_games([game])
+                self.assertEqual(window.dlc_game_select.currentIndex(), 0)
+                self.assertEqual(
+                    window.dlc_game_select.currentData(),
+                    {
+                        "app_id": "12345",
+                        "name": "Example Game",
+                        "folder": str(folder),
+                    },
+                )
+                check_dlc.assert_called_once_with()
             finally:
                 window.close()
 
@@ -504,7 +512,7 @@ class QtGuiTests(unittest.TestCase):
         try:
             self.assertIn("installed Steam games", window.library_table.empty_text)
             self.assertIn("prepared from the Store", window.download_table.empty_text)
-            self.assertIn("Check DLC", window.dlc_table.empty_text)
+            self.assertIn("installed Steam game", window.dlc_table.empty_text)
             self.assertIn("save snapshots", window.vault_table.empty_text)
         finally:
             window.close()
@@ -513,8 +521,11 @@ class QtGuiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             game_dir = Path(directory)
             window = MainWindow(auto_start=False)
-            window.dlc_folder.setText(str(game_dir))
-            window.dlc_app_id.setText("42")
+            window.dlc_game_select.addItem(
+                "Example Game  ·  42",
+                {"app_id": "42", "name": "Example Game", "folder": str(game_dir)},
+            )
+            window.dlc_game_select.setCurrentIndex(0)
             window.dlc_table.setRowCount(1)
             check = QTableWidgetItem()
             check.setCheckState(Qt.CheckState.Checked)
@@ -556,6 +567,9 @@ class QtGuiTests(unittest.TestCase):
                     window.download_table.item(0, 2).text(),
                 )
                 self.assertEqual(window.download_table.cellWidget(0, 3).value(), 100)
+                self.assertEqual(
+                    window.download_table.cellWidget(0, 5).text(), "Open folder"
+                )
                 self.assertIn("installed and verified", window.dlc_summary.text())
             finally:
                 window.close()

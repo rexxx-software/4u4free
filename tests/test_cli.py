@@ -79,6 +79,20 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("Steam was not found", errors)
 
+    def test_dlc_validation_finds_nested_steam_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            game = Path(directory)
+            release = game / "Release"
+            release.mkdir()
+            (release / "steam_api64.dll").write_bytes(b"dll")
+
+            code, output, errors = self.run_cli(
+                "dlc-unlocker", str(game), "--validate", "--json"
+            )
+
+        self.assertEqual((code, errors), (0, ""))
+        self.assertIn('"steam_api64": true', output)
+
     def test_integrated_profiles_snapshots_managed_lua_and_config_io(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

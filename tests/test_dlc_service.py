@@ -24,8 +24,11 @@ def test_fetch_dlc_catalog_returns_names(monkeypatch):
     )
     monkeypatch.setattr(
         dlc_service,
-        "get_dlc_names_from_store",
-        lambda _ids: {11: "First DLC", 12: "Second DLC"},
+        "get_dlc_details_from_store",
+        lambda _ids: {
+            11: {"name": "First DLC", "type": "dlc"},
+            12: {"name": "Second DLC", "type": "dlc"},
+        },
     )
 
     result = dlc_service.fetch_dlc_catalog(42)
@@ -34,6 +37,24 @@ def test_fetch_dlc_catalog_returns_names(monkeypatch):
     assert result["dlcs"] == [
         {"id": 11, "name": "First DLC"},
         {"id": 12, "name": "Second DLC"},
+    ]
+
+
+def test_fetch_dlc_catalog_excludes_soundtracks(monkeypatch):
+    monkeypatch.setattr(
+        dlc_service, "get_dlc_list_from_store", lambda _app_id: ("Game", [11, 12])
+    )
+    monkeypatch.setattr(
+        dlc_service,
+        "get_dlc_details_from_store",
+        lambda _ids: {
+            11: {"name": "Fan Pack", "type": "dlc"},
+            12: {"name": "Soundtrack", "type": "music"},
+        },
+    )
+
+    assert dlc_service.fetch_dlc_catalog(42)["dlcs"] == [
+        {"id": 11, "name": "Fan Pack"}
     ]
 
 
@@ -47,6 +68,26 @@ def test_inspect_game_apis_searches_subdirectories(tmp_path):
     steam64 = next(row for row in rows if row["filename"] == "steam_api64.dll")
     assert steam64["found"] is True
     assert steam64["paths"] == [nested / "steam_api64.dll"]
+
+
+def test_unlocker_detection_uses_the_unlocker_config(tmp_path):
+    nested = tmp_path / "Release"
+    nested.mkdir()
+    (nested / "steam_api64.dll").write_bytes(b"replacement")
+    (nested / "steam_api64_o.dll").write_bytes(b"original")
+    (nested / "cream_api.ini").write_text("[steam]\n", encoding="utf-8")
+
+    rows = {row["key"]: row["installed"] for row in dlc_service.inspect_unlockers(tmp_path)}
+
+    assert rows["creamapi"] is True
+    assert rows["smokeapi"] is False
+
+    (nested / "cream_api.ini").unlink()
+    (nested / "SmokeAPI.config.json").write_text("{}\n", encoding="utf-8")
+    rows = {row["key"]: row["installed"] for row in dlc_service.inspect_unlockers(tmp_path)}
+
+    assert rows["creamapi"] is False
+    assert rows["smokeapi"] is True
 
 
 def test_install_smokeapi_dispatches_with_bundled_directory(monkeypatch, tmp_path):

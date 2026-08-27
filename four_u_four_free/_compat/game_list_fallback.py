@@ -230,7 +230,7 @@ def _load_games_json(force=False):
             logger.debug("Fetching games.json from GitHub...")
         try:
             request = _req.Request(
-                _GAMES_JSON_URL, headers={"User-Agent": "4u4free/0.5.2"}
+                _GAMES_JSON_URL, headers={"User-Agent": "4u4free/0.5.3"}
             )
             with _req.urlopen(request, timeout=30, context=_get_ssl_ctx()) as resp:
                 data = json.load(resp)
@@ -288,7 +288,7 @@ def _load_name_source(
     last_exc = None
     for url in urls:
         try:
-            request = _req.Request(url, headers={"User-Agent": "4u4free/0.5.2"})
+            request = _req.Request(url, headers={"User-Agent": "4u4free/0.5.3"})
             with _req.urlopen(request, timeout=20, context=_get_ssl_ctx()) as resp:
                 data = json.load(resp)
             normalized = _normalize_name_data(data)

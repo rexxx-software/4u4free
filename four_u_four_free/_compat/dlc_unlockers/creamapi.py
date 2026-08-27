@@ -91,18 +91,7 @@ class CreamAPIUnlocker(UnlockerBase):
             logger.warning("Could not remove temporary file %s", path)
 
     def is_installed(self, game_dir):
-        config_exists = (game_dir / self.CONFIG_FILENAME).exists()
-        if not config_exists:
-            for _ in game_dir.rglob(self.CONFIG_FILENAME):
-                config_exists = True
-                break
-        backup_32 = self._find_steam_api_dll(
-            game_dir, self._backup_name(self.STEAM_API_32)
-        )
-        backup_64 = self._find_steam_api_dll(
-            game_dir, self._backup_name(self.STEAM_API_64)
-        )
-        return config_exists or backup_32 is not None or backup_64 is not None
+        return any(game_dir.rglob(self.CONFIG_FILENAME))
 
     def install(self, game_dir, dlc_ids, app_id):
         self.last_error = None

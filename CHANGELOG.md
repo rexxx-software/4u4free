@@ -2,6 +2,16 @@
 
 Notable changes to 4u4free are recorded here.
 
+## 0.5.3
+
+- Simplified DLC setup to an installed-game dropdown with automatic App ID and
+  install-folder discovery.
+- Made DLC catalogs load automatically when the selected game changes.
+- Excluded soundtracks and other non-DLC app types from game DLC setup.
+- Corrected nested Steam API inspection and CreamAPI/SmokeAPI status detection.
+- Clarified when a local DLC setup requires a game restart rather than a Steam
+  download, and replaced the misleading download-row action with Open folder.
+
 ## 0.5.2
 
 - Updated the primary Store action label.

@@ -20,8 +20,8 @@ from four_u_four_free._compat.dlc_unlockers.validation import (
     validate_game_directory,
 )
 from four_u_four_free._compat.network.steam_store import (
+    get_dlc_details_from_store,
     get_dlc_list_from_store,
-    get_dlc_names_from_store,
 )
 
 
@@ -86,13 +86,17 @@ def fetch_dlc_catalog(app_id: int) -> dict:
             "Steam did not return DLC data for this App ID. Check the ID and try again."
         )
     app_name, dlc_ids = result
-    names = get_dlc_names_from_store(dlc_ids)
+    details = get_dlc_details_from_store(dlc_ids)
     return {
         "app_id": app_id,
         "name": app_name,
         "dlcs": [
-            {"id": dlc_id, "name": names.get(dlc_id, f"DLC {dlc_id}")}
+            {
+                "id": dlc_id,
+                "name": details.get(dlc_id, {}).get("name", f"DLC {dlc_id}"),
+            }
             for dlc_id in dlc_ids
+            if details.get(dlc_id, {}).get("type", "") in {"", "dlc"}
         ],
     }
 

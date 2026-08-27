@@ -1042,12 +1042,15 @@ def cmd_dlc_unlocker(args, store: ConfigStore) -> int:
         raise FourUFourFreeError(error)
 
     if args.validate:
+        def has_api(filename: str) -> bool:
+            return any(path.is_file() for path in game_path.rglob(filename))
+
         payload = {
             "game_path": str(game_path),
-            "steam_api32": (game_path / "steam_api.dll").exists(),
-            "steam_api64": (game_path / "steam_api64.dll").exists(),
-            "uplay_r1": (game_path / "uplay_r1_loader.dll").exists(),
-            "uplay_r2": (game_path / "upc_r2_loader.dll").exists(),
+            "steam_api32": has_api("steam_api.dll"),
+            "steam_api64": has_api("steam_api64.dll"),
+            "uplay_r1": has_api("uplay_r1_loader.dll"),
+            "uplay_r2": has_api("upc_r2_loader.dll"),
         }
         if args.json:
             _json(payload)
