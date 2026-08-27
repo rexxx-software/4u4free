@@ -54,7 +54,7 @@
 
 ### Windows release
 
-Download the latest installer or portable ZIP from [Releases](../../releases/latest). The installer adds Start menu shortcuts and a standard Windows uninstaller. The portable build can be extracted anywhere and run directly.
+Download the latest Windows installer from [Releases](../../releases/latest). It adds Start menu shortcuts and a standard Windows uninstaller.
 
 ### Run from source on Windows
 

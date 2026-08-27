@@ -1,8 +1,7 @@
 # Release guide
 
 4u4free releases are built from version tags by `.github/workflows/release.yml`.
-The workflow publishes a Windows installer, a portable Windows ZIP, Python
-source and wheel packages, and SHA-256 checksums.
+The workflow publishes the Windows installer and a SHA-256 checksum file.
 
 ## Repository settings
 
@@ -41,8 +40,8 @@ workflow uses GitHub's built-in token and does not require project secrets.
 
 The workflow rejects a tag whose version does not match both Python version
 files. After the build completes, download the release assets, verify the
-checksums, install the Windows package on a clean system, and test the portable
-build before announcing the release.
+checksum, and install the Windows package on a clean system before announcing
+the release.
 
 ## Local Windows build
 

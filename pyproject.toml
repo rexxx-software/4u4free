@@ -30,7 +30,7 @@ dependencies = [
   "colorama",
   "InquirerPy",
   "requests",
-  "python-vdf",
+  "vdf",
   "tqdm",
   "psutil",
   "appdirs",
