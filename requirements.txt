@@ -271,7 +271,7 @@ win10toast==0.9
     # via steam-manifest-decrypt (pyproject.toml)
 wsproto==1.2.0
     # via trio-websocket
-zipp==3.23.0
+zipp==4.1.0
     # via importlib-metadata
 zope-event==6.0
     # via gevent
