@@ -38,7 +38,7 @@ dependencies = [
   "pathvalidate",
   "gevent",
   "gevent-eventemitter==2.1",
-  "protobuf==5.29.6",
+  "protobuf==7.36.0",
   "steam==1.4.4",
 ]
 
